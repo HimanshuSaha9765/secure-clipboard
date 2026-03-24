@@ -1,65 +1,589 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback, useEffect, useRef } from "react";
 
 export default function Home() {
+  const [activeTab, setActiveTab] = useState("create");
+  const [inputType, setInputType] = useState("text");
+  const [textValue, setTextValue] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [timeLeft, setTimeLeft] = useState(null);
+
+  const [retrieveCode, setRetrieveCode] = useState("");
+  const [retrieveResult, setRetrieveResult] = useState(null);
+  const [retrieveError, setRetrieveError] = useState("");
+  const [retrieveLoading, setRetrieveLoading] = useState(false);
+  const [retrieveTimeLeft, setRetrieveTimeLeft] = useState(null);
+
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!timeLeft || timeLeft <= 0) return;
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1000) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1000;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft]);
+
+  useEffect(() => {
+    if (!retrieveTimeLeft || retrieveTimeLeft <= 0) return;
+    const timer = setInterval(() => {
+      setRetrieveTimeLeft((prev) => {
+        if (prev <= 1000) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1000;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retrieveTimeLeft]);
+
+  const formatTime = (ms) => {
+    if (!ms || ms <= 0) return "EXPIRED";
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const handleDragEnter = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      setSelectedFile(files[0]);
+      setError("");
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePaste = (e) => {
+      if (activeTab !== "create" || inputType !== "file") return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let item of items) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) {
+            setSelectedFile(file);
+            setError("");
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [activeTab, inputType]);
+
+  const handleCreate = async () => {
+    setIsLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const formData = new FormData();
+      if (inputType === "text") {
+        if (!textValue.trim()) {
+          setError("Please enter some text");
+          setIsLoading(false);
+          return;
+        }
+        formData.append("type", "text");
+        formData.append("content", textValue);
+      } else {
+        if (!selectedFile) {
+          setError("Please select a file");
+          setIsLoading(false);
+          return;
+        }
+        formData.append("type", "file");
+        formData.append("file", selectedFile);
+      }
+
+      const response = await fetch("/api/clip", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Something went wrong");
+
+      setResult({
+        id: data.id,
+        code: data.code,
+        expiresAt: data.expiresAt,
+        link: `${window.location.origin}/clip/${data.id}`,
+      });
+      setTimeLeft(data.expiresAt - Date.now());
+      setTextValue("");
+      setSelectedFile(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRetrieve = async () => {
+    setRetrieveLoading(true);
+    setRetrieveError("");
+    setRetrieveResult(null);
+    try {
+      const response = await fetch("/api/retrieve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: retrieveCode.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.error || "Invalid or expired code");
+
+      setRetrieveResult({
+        type: data.clip.type,
+        content: data.clip.content,
+        fileName: data.clip.fileName,
+        fileType: data.clip.fileType,
+        fileSize: data.clip.fileSize,
+      });
+      setRetrieveTimeLeft(data.remainingMs);
+    } catch (err) {
+      setRetrieveError(err.message);
+    } finally {
+      setRetrieveLoading(false);
+    }
+  };
+
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("✅ Copied!");
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      alert("✅ Copied!");
+    }
+  };
+
+  const downloadFile = (base64, fileName, fileType) => {
+    const link = document.createElement("a");
+    link.href = `data:${fileType};base64,${base64}`;
+    link.download = fileName;
+    link.click();
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.js file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div
+      className="animate-fade-in"
+      style={{ display: "flex", flexDirection: "column", gap: "32px" }}
+    >
+      {}
+      <div style={{ textAlign: "center" }}>
+        <h1
+          style={{
+            fontSize: "2.25rem",
+            fontWeight: "700",
+            marginBottom: "8px",
+          }}
+        >
+          📋 Secure Clipboard
+        </h1>
+        <p style={{ color: "var(--secondary)" }}>
+          Share text and files securely • Auto-expires in 10 minutes
+        </p>
+      </div>
+
+      {}
+      <div style={{ display: "flex", justifyContent: "center", gap: "16px" }}>
+        <button
+          onClick={() => setActiveTab("create")}
+          className={`tab-button ${activeTab === "create" ? "active" : "inactive"}`}
+        >
+          ✏️ Create Clip
+        </button>
+        <button
+          onClick={() => setActiveTab("retrieve")}
+          className={`tab-button ${activeTab === "retrieve" ? "active" : "inactive"}`}
+        >
+          🔍 Retrieve
+        </button>
+      </div>
+
+      {}
+      {activeTab === "create" && (
+        <div
+          className="card"
+          style={{ display: "flex", flexDirection: "column", gap: "24px" }}
+        >
+          {}
+          <div
+            style={{ display: "flex", justifyContent: "center", gap: "16px" }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <button
+              onClick={() => setInputType("text")}
+              className={`type-button ${inputType === "text" ? "active" : "inactive"}`}
+            >
+              📝 Text
+            </button>
+            <button
+              onClick={() => setInputType("file")}
+              className={`type-button ${inputType === "file" ? "active" : "inactive"}`}
+            >
+              📎 File
+            </button>
+          </div>
+
+          {}
+          {inputType === "text" && (
+            <textarea
+              value={textValue}
+              onChange={(e) => setTextValue(e.target.value)}
+              placeholder="Paste or type your text here..."
+              className="input-field"
+              style={{ height: "192px", resize: "none" }}
+              disabled={isLoading}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          )}
+
+          {}
+          {inputType === "file" && (
+            <div
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`drop-zone ${isDragging ? "active" : ""}`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    setSelectedFile(e.target.files[0]);
+                    setError("");
+                  }
+                }}
+                disabled={isLoading}
+              />
+              <div>
+                <p style={{ fontSize: "2.5rem", marginBottom: "8px" }}>
+                  {isDragging ? "📥" : selectedFile ? "✅" : "📁"}
+                </p>
+                <p style={{ fontWeight: "500" }}>
+                  {selectedFile
+                    ? selectedFile.name
+                    : "Drag & drop or click to upload"}
+                </p>
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--secondary)",
+                    marginTop: "4px",
+                  }}
+                >
+                  Max 700KB • Text, code, PDF, documents only
+                </p>
+                {selectedFile && (
+                  <p
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--secondary)",
+                      marginTop: "4px",
+                    }}
+                  >
+                    {(selectedFile.size / 1024).toFixed(1)} KB
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {}
+          {error && (
+            <div
+              className="badge-error"
+              style={{ textAlign: "center", display: "block" }}
+            >
+              {error}
+            </div>
+          )}
+
+          {}
+          <button
+            onClick={handleCreate}
+            disabled={isLoading}
+            className="btn-primary"
+            style={{ width: "100%" }}
           >
-            Documentation
-          </a>
+            {isLoading ? "🔄 Processing..." : "🚀 Generate Link"}
+          </button>
+
+          {}
+          {result && (
+            <div
+              className="result-box success"
+              style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+            >
+              {}
+              <div>
+                <p
+                  style={{
+                    fontWeight: "500",
+                    marginBottom: "8px",
+                    color: "var(--foreground)",
+                  }}
+                >
+                  🔗 Share Link:
+                </p>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    value={result.link}
+                    readOnly
+                    className="input-field"
+                    style={{ fontSize: "14px" }}
+                  />
+                  <button
+                    onClick={() => copyToClipboard(result.link)}
+                    className="btn-secondary"
+                    style={{ padding: "12px 16px", whiteSpace: "nowrap" }}
+                  >
+                    📋 Copy
+                  </button>
+                </div>
+              </div>
+
+              {}
+              <div>
+                <p
+                  style={{
+                    fontWeight: "500",
+                    marginBottom: "8px",
+                    color: "var(--foreground)",
+                  }}
+                >
+                  🔢 Retrieval Code:
+                </p>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    value={result.code}
+                    readOnly
+                    className="input-field"
+                    style={{
+                      textAlign: "center",
+                      fontFamily: "monospace",
+                      fontSize: "1.25rem",
+                      letterSpacing: "0.15em",
+                    }}
+                  />
+                  <button
+                    onClick={() => copyToClipboard(result.code)}
+                    className="btn-secondary"
+                    style={{ padding: "12px 16px", whiteSpace: "nowrap" }}
+                  >
+                    📋 Copy
+                  </button>
+                </div>
+              </div>
+
+              {}
+              {timeLeft !== null && timeLeft > 0 && (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: "13px", color: "var(--secondary)" }}>
+                    ⏳ Expires in:
+                  </p>
+                  <p className="countdown">{formatTime(timeLeft)}</p>
+                </div>
+              )}
+
+              {timeLeft !== null && timeLeft <= 0 && (
+                <div style={{ textAlign: "center" }}>
+                  <p className="badge-error">⏰ This clip has expired</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      </main>
+      )}
+
+      {}
+      {activeTab === "retrieve" && (
+        <div
+          className="card"
+          style={{ display: "flex", flexDirection: "column", gap: "24px" }}
+        >
+          <div>
+            <label
+              style={{
+                fontWeight: "500",
+                display: "block",
+                marginBottom: "8px",
+                color: "var(--foreground)",
+              }}
+            >
+              Enter Retrieval Code:
+            </label>
+            <input
+              type="text"
+              value={retrieveCode}
+              onChange={(e) => setRetrieveCode(e.target.value.toUpperCase())}
+              placeholder="e.g., X7K9P2"
+              className="input-field"
+              style={{
+                textAlign: "center",
+                fontFamily: "monospace",
+                fontSize: "1.25rem",
+                letterSpacing: "0.15em",
+                textTransform: "uppercase",
+              }}
+              maxLength={6}
+              disabled={retrieveLoading}
+            />
+          </div>
+
+          <button
+            onClick={handleRetrieve}
+            disabled={retrieveLoading || !retrieveCode.trim()}
+            className="btn-primary"
+            style={{ width: "100%" }}
+          >
+            {retrieveLoading ? "🔄 Fetching..." : "🔍 Retrieve"}
+          </button>
+
+          {retrieveError && (
+            <div
+              className="badge-error"
+              style={{ textAlign: "center", display: "block" }}
+            >
+              {retrieveError}
+            </div>
+          )}
+
+          {retrieveResult && (
+            <div
+              className="result-box info"
+              style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+            >
+              {}
+              {retrieveTimeLeft !== null && retrieveTimeLeft > 0 && (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: "13px", color: "var(--secondary)" }}>
+                    ⏳ Expires in:
+                  </p>
+                  <p
+                    className="countdown"
+                    style={
+                      retrieveTimeLeft < 60000 ? { color: "var(--error)" } : {}
+                    }
+                  >
+                    {formatTime(retrieveTimeLeft)}
+                  </p>
+                </div>
+              )}
+
+              {}
+              {retrieveResult.type === "text" && (
+                <div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <span style={{ fontWeight: "500" }}>📝 Text Content</span>
+                    <button
+                      onClick={() => copyToClipboard(retrieveResult.content)}
+                      className="btn-secondary"
+                      style={{ padding: "6px 12px", fontSize: "13px" }}
+                    >
+                      📋 Copy
+                    </button>
+                  </div>
+                  <div className="content-preview">
+                    <pre>{retrieveResult.content}</pre>
+                  </div>
+                </div>
+              )}
+
+              {}
+              {retrieveResult.type === "file" && (
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: "3rem", marginBottom: "8px" }}>📄</p>
+                  <p style={{ fontWeight: "500", fontSize: "1.1rem" }}>
+                    {retrieveResult.fileName}
+                  </p>
+                  <p
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--secondary)",
+                      marginTop: "4px",
+                    }}
+                  >
+                    {(retrieveResult.fileSize / 1024).toFixed(1)} KB
+                  </p>
+                  <button
+                    onClick={() =>
+                      downloadFile(
+                        retrieveResult.content,
+                        retrieveResult.fileName,
+                        retrieveResult.fileType,
+                      )
+                    }
+                    className="btn-primary"
+                    style={{ marginTop: "16px" }}
+                  >
+                    ⬇️ Download File
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {}
+      <div style={{ textAlign: "center" }}>
+        <a href="/admin" className="link-subtle">
+          🔐 Admin Access
+        </a>
+      </div>
     </div>
   );
 }
