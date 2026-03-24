@@ -218,10 +218,22 @@ export default function Home() {
             marginBottom: "8px",
           }}
         >
-          📋 Secure Clipboard
+          Secure Clipboard — Temporary Private Text & File Sharing
         </h1>
-        <p style={{ color: "var(--secondary)" }}>
-          Share text and files securely • Auto-expires in 10 minutes
+
+        <p
+          style={{
+            color: "var(--secondary)",
+            maxWidth: "600px",
+            margin: "0 auto",
+          }}
+        >
+          Share text, code, and files securely with automatic deletion after 10
+          minutes. No login required. No tracking. Fast and private sharing.
+        </p>
+
+        <p style={{ marginTop: "8px", fontSize: "14px", opacity: 0.7 }}>
+          No signup required • Auto-delete • Max 700KB
         </p>
       </div>
 
@@ -231,7 +243,7 @@ export default function Home() {
           onClick={() => setActiveTab("create")}
           className={`tab-button ${activeTab === "create" ? "active" : "inactive"}`}
         >
-          ✏️ Create Clip
+          ✏️ Create Secure Clip
         </button>
         <button
           onClick={() => setActiveTab("retrieve")}
@@ -270,7 +282,7 @@ export default function Home() {
             <textarea
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
-              placeholder="Paste or type your text here..."
+              placeholder="Paste text for secure temporary sharing..."
               className="input-field"
               style={{ height: "192px", resize: "none" }}
               disabled={isLoading}
@@ -579,7 +591,47 @@ export default function Home() {
       )}
 
       {}
+      <div
+        style={{ maxWidth: "700px", margin: "40px auto", textAlign: "center" }}
+      >
+        <h2 style={{ marginBottom: "12px" }}>
+          🔐 Secure Clipboard for Temporary File Sharing
+        </h2>
+
+        <p style={{ color: "var(--secondary)", marginBottom: "10px" }}>
+          Secure Clipboard is a private pastebin alternative that lets you share
+          text, code, and files with automatic deletion after 10 minutes.
+        </p>
+
+        <p style={{ color: "var(--secondary)" }}>
+          Ideal for developers, students, and professionals who need fast,
+          private, and temporary file sharing without leaving traces online.
+        </p>
+      </div>
       <div style={{ textAlign: "center" }}>
+        <div
+          style={{
+            maxWidth: "700px",
+            margin: "40px auto",
+            textAlign: "center",
+          }}
+        >
+          <h2>⚡ How it works</h2>
+
+          <p style={{ color: "var(--secondary)" }}>
+            1. Create a secure clipboard by adding text or uploading a file
+          </p>
+          <p style={{ color: "var(--secondary)" }}>
+            2.Share the link or retrieval code
+          </p>
+          <p style={{ color: "var(--secondary)" }}>
+            3. Your data automatically delete after 10 minutes
+          </p>
+
+          <p style={{ color: "var(--secondary)", marginTop: "10px" }}>
+            No login, no storage, no tracking — just fast and private sharing.
+          </p>
+        </div>
         <a href="/admin" className="link-subtle">
           🔐 Admin Access
         </a>
