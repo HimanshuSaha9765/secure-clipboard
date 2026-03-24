@@ -1,36 +1,126 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# 🔒 Secure Clipboard — Private Temporary Sharing
 
-## Getting Started
+> Share text, code, and files securely with auto-expiry. No login. No tracking.
 
-First, run the development server:
+<p align="center">
+  <a href="https://cliptamer.vercel.app/">
+    <img src="https://img.shields.io/badge/🚀 Live Demo-Click Here-black?style=for-the-badge&logo=vercel">
+  </a>
+</p>
+
+---
+
+## ⚡ Why this exists
+
+Most clipboard tools store your data **forever**.
+
+**Secure Clipboard fixes that.**
+
+- Your data auto-deletes in **10 minutes**
+- No accounts, no history, no tracking
+- Built for **privacy-first sharing**
+
+---
+
+## 🌐 Live Demo
+
+👉 **Try it now:**
+🔗 [https://cliptamer.vercel.app/](https://cliptamer.vercel.app/)
+
+---
+
+## ✨ Features
+
+- ⏱️ **Auto-Delete (10 min)** — Data is permanently erased
+- 🔗 **Share via Link or Code**
+- 📎 **Supports Files & Text (≤700KB)**
+- 🔐 **Zero-Knowledge Approach**
+- ⚡ **Fast (Edge + Redis)**
+- 📱 **Mobile Friendly**
+- 🌙 **Dark / Light Mode**
+
+---
+
+## 📸 Preview
+
+### 🏠 Create Clip
+
+![Home](./assets/home-screenshot.png)
+
+### 🔍 Retrieve Clip
+
+![Retrieve](./assets/retrieval-screenshot.png)
+
+---
+
+## 🧠 Tech Stack
+
+- **Next.js 15 (App Router)**
+- **Upstash Redis (Serverless)**
+- **Tailwind CSS**
+- **Vercel Deployment**
+- **Bcrypt + Rate Limiting**
+
+---
+
+## 🚀 Run Locally
+
+```bash
+git clone https://github.com/HimanshuSaha9765/secure-clipboard.git
+cd secure-clipboard
+npm install
+```
+
+Create `.env.local`:
+
+```env
+UPSTASH_REDIS_REST_URL=your_url
+UPSTASH_REDIS_REST_TOKEN=your_token
+SESSION_SECRET=your_secret
+```
+
+Run:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open: http://localhost:3000
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 🔐 Security Highlights
 
-## Learn More
+- Rate limiting (anti brute-force)
+- HTTP-only cookies
+- Redis TTL auto cleanup
+- No logs / no tracking
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 📂 Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+app/
+lib/
+public/
+```
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🌍 Visibility Tip
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+If you like this project, ⭐ star it and share it.
+
+---
+
+## 👨‍💻 Author
+
+Himanshu Saha
+GitHub: https://github.com/HimanshuSaha9765
+
+---
+
+<p align="center">
+Built for privacy ⚡
+</p>

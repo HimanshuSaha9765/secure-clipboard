@@ -1,8 +1,9 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Secure Clipboard",
-  description: "Share text and files securely with auto-expiry",
+  title: "Secure Clipboard - Temporary Private Sharing",
+  description:
+    "Share text and files securely with auto deletion. No login required.",
   robots: "noindex, nofollow",
 };
 
