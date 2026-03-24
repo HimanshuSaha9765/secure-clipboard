@@ -4,9 +4,14 @@ export const metadata = {
   title: "Secure Clipboard - Temporary Private Sharing",
   description:
     "Share text and files securely with auto deletion. No login required.",
-  robots: "noindex, nofollow",
+  verification: {
+    google: "0w4cn1BIsmpmt36bKM2CByPcfrw59jvfJ5Hw0gY2I0U",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
-
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
