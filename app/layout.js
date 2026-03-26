@@ -41,7 +41,7 @@ export default function RootLayout({ children }) {
         {/* Midas Touch Analytics */}
         <Script
           src="https://midas-touch-analytics.onrender.com/tracker.js"
-          data-id="site_37f3862c"
+          data-id="site_ffbe3e80"
           strategy="afterInteractive"
         />
       </body>
