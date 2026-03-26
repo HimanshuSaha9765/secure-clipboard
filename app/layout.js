@@ -1,4 +1,5 @@
 import "./globals.css";
+import Script from "next/script";
 
 export const metadata = {
   title: "Secure Clipboard - Temporary Private Sharing",
@@ -36,6 +37,13 @@ export default function RootLayout({ children }) {
         >
           <p>🔒 Secure Clipboard • Auto-expires in 10 minutes</p>
         </footer>
+
+        {/* Midas Touch Analytics */}
+        <Script
+          src="https://midas-touch-analytics.onrender.com/tracker.js"
+          data-id="site_37f3862c"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );
