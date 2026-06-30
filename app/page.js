@@ -156,13 +156,15 @@ export default function Home() {
   };
 
   // ─── Create Clip ───
+  // ─── Create Clip ───
   const handleCreate = async () => {
     setIsLoading(true);
     setError("");
     setResult(null);
 
     try {
-      const formData = new FormData();
+      // ─── Pre-flight size check (BEFORE upload) ───
+      const VERCEL_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
 
       if (inputType === "text") {
         if (!textValue.trim()) {
@@ -170,8 +172,15 @@ export default function Home() {
           setIsLoading(false);
           return;
         }
-        formData.append("type", "text");
-        formData.append("content", textValue);
+        // Text size check (UTF-8 byte length)
+        const textBytes = new Blob([textValue]).size;
+        if (textBytes > VERCEL_LIMIT) {
+          setError(
+            `Text too large (${(textBytes / 1024 / 1024).toFixed(2)}MB). Maximum is 4.5MB.`,
+          );
+          setIsLoading(false);
+          return;
+        }
       } else {
         if (selectedFiles.length === 0) {
           setError("Please select files");
@@ -179,21 +188,72 @@ export default function Home() {
           return;
         }
 
+        // Calculate total upload size
+        const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+
+        if (totalSize > VERCEL_LIMIT) {
+          const totalMB = (totalSize / 1024 / 1024).toFixed(2);
+          setError(
+            `Total file size is ${totalMB}MB. Public sharing limit is 4.5MB. ` +
+              `Please remove some files or upload them separately.`,
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        // Check each file individually
+        const oversizedFile = selectedFiles.find((f) => f.size > VERCEL_LIMIT);
+        if (oversizedFile) {
+          setError(
+            `"${oversizedFile.name}" is larger than 4.5MB. Please remove it.`,
+          );
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // ─── Build FormData ───
+      const formData = new FormData();
+
+      if (inputType === "text") {
+        formData.append("type", "text");
+        formData.append("content", textValue);
+      } else {
         if (selectedFiles.length === 1) {
           formData.append("type", "file");
           formData.append("file", selectedFiles[0]);
         } else {
           formData.append("type", "bulk");
-          selectedFiles.forEach((file) => {
-            formData.append("files", file);
-          });
+          selectedFiles.forEach((file) => formData.append("files", file));
         }
       }
 
+      // ─── Send Request ───
       const response = await fetch("/api/clip", {
         method: "POST",
         body: formData,
       });
+
+      // ─── Handle Response Safely ───
+      // Always check response type before parsing JSON
+      const contentType = response.headers.get("content-type");
+
+      // Handle 413 (Request Entity Too Large) — returns plain text, not JSON
+      if (response.status === 413) {
+        throw new Error("Upload too large. Total size must be under 4.5MB.");
+      }
+
+      // If not JSON, it's a server error (not our app)
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error("Non-JSON response:", text);
+        throw new Error(
+          response.status === 413
+            ? "Upload too large. Maximum total size is 4.5MB."
+            : "Server error. Please try again with smaller files.",
+        );
+      }
+
       const data = await response.json();
 
       if (!response.ok) {
@@ -203,7 +263,6 @@ export default function Home() {
         throw new Error(data.error || "Something went wrong");
       }
 
-      // Show rejected files from bulk upload
       if (data.rejectedFiles && data.rejectedFiles.length > 0) {
         data.rejectedFiles.forEach((r) =>
           addToast(`⚠️ ${r.reason}`, "warning"),
@@ -226,7 +285,6 @@ export default function Home() {
       setIsLoading(false);
     }
   };
-
   // ─── Retrieve ───
   const handleRetrieve = async () => {
     if (!retrieveCode.trim()) return;

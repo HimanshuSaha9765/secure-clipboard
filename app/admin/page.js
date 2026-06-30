@@ -133,6 +133,7 @@ export default function AdminPage() {
   };
 
   // ─── Send to Telegram (with smart queue — Feature #6) ───
+  // ─── Send to Telegram ───
   const handleSend = async () => {
     setIsSending(true);
     setSendError("");
@@ -140,16 +141,23 @@ export default function AdminPage() {
     setSendProgress("");
 
     try {
-      const formData = new FormData();
+      const VERCEL_LIMIT = 4.5 * 1024 * 1024;
 
+      // ─── Pre-flight check ───
       if (inputType === "text") {
         if (!textValue.trim()) {
           setSendError("Please enter some text");
           setIsSending(false);
           return;
         }
-        formData.append("type", "text");
-        formData.append("content", textValue);
+        const textBytes = new Blob([textValue]).size;
+        if (textBytes > VERCEL_LIMIT) {
+          setSendError(
+            `Text too large (${(textBytes / 1024 / 1024).toFixed(2)}MB). Max 4.5MB.`,
+          );
+          setIsSending(false);
+          return;
+        }
       } else {
         if (selectedFiles.length === 0) {
           setSendError("Please select files");
@@ -157,11 +165,38 @@ export default function AdminPage() {
           return;
         }
 
+        // Check each file individually (max 4.5MB per file)
+        const oversizedFile = selectedFiles.find((f) => f.size > VERCEL_LIMIT);
+        if (oversizedFile) {
+          const fileMB = (oversizedFile.size / 1024 / 1024).toFixed(2);
+          setSendError(
+            `"${oversizedFile.name}" is ${fileMB}MB. Maximum per file is 4.5MB. Please remove it.`,
+          );
+          setIsSending(false);
+          return;
+        }
+
+        // For bulk: if total > 4.5MB, send files ONE AT A TIME (smart queue)
+        const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+
+        if (selectedFiles.length > 1 && totalSize > VERCEL_LIMIT) {
+          // ── SMART QUEUE: Send each file individually ──
+          await sendFilesOneByOne();
+          return;
+        }
+      }
+
+      // ─── Normal Send (single request) ───
+      const formData = new FormData();
+
+      if (inputType === "text") {
+        formData.append("type", "text");
+        formData.append("content", textValue);
+      } else {
         if (selectedFiles.length === 1) {
           formData.append("type", "file");
           formData.append("file", selectedFiles[0]);
         } else {
-          // Feature #6: Smart queue — send as bulk, server handles queue
           formData.append("type", "bulk");
           setSendProgress(`Uploading ${selectedFiles.length} files...`);
           selectedFiles.forEach((file) => formData.append("files", file));
@@ -172,6 +207,22 @@ export default function AdminPage() {
         method: "POST",
         body: formData,
       });
+
+      // Handle non-JSON response (413, 500, etc.)
+      const contentType = response.headers.get("content-type");
+
+      if (response.status === 413) {
+        throw new Error("Upload too large. Try sending files individually.");
+      }
+
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await response.text();
+        console.error("Non-JSON response:", text);
+        throw new Error(
+          "Server error. Please try smaller files or send one at a time.",
+        );
+      }
+
       const data = await response.json();
 
       if (!response.ok) {
@@ -201,6 +252,80 @@ export default function AdminPage() {
       setIsSending(false);
       setSendProgress("");
     }
+  };
+
+  // ─── Smart Queue: Send files one by one (Feature #6) ───
+  const sendFilesOneByOne = async () => {
+    const totalFiles = selectedFiles.length;
+    let successCount = 0;
+    let failCount = 0;
+
+    setSendProgress(`Smart queue: Sending ${totalFiles} files individually...`);
+    addToast(
+      `📦 Total size exceeds 4.5MB. Sending ${totalFiles} files one by one...`,
+      "success",
+    );
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      setSendProgress(`Sending file ${i + 1} of ${totalFiles}: ${file.name}`);
+
+      try {
+        const formData = new FormData();
+        formData.append("type", "file");
+        formData.append("file", file);
+
+        const response = await fetch("/api/admin/send", {
+          method: "POST",
+          body: formData,
+        });
+
+        const contentType = response.headers.get("content-type");
+
+        if (response.status === 413) {
+          addToast(`❌ ${file.name}: File too large`);
+          failCount++;
+          continue;
+        }
+
+        if (!contentType || !contentType.includes("application/json")) {
+          addToast(`❌ ${file.name}: Server error`);
+          failCount++;
+          continue;
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            setIsLoggedIn(false);
+            throw new Error("Session expired. Please login again.");
+          }
+          addToast(`❌ ${file.name}: ${data.error || "Failed"}`);
+          failCount++;
+          continue;
+        }
+
+        addToast(`✅ ${file.name} sent (${i + 1}/${totalFiles})`, "success");
+        successCount++;
+
+        // Delay between sends to avoid rate limiting
+        if (i < selectedFiles.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      } catch (err) {
+        addToast(`❌ ${file.name}: ${err.message}`);
+        failCount++;
+      }
+    }
+
+    setSendResult(
+      `✅ Queue complete: ${successCount} sent, ${failCount} failed`,
+    );
+    setTextValue("");
+    setSelectedFiles([]);
+    setSendProgress("");
+    setIsSending(false);
   };
 
   const handleLogout = () => {
