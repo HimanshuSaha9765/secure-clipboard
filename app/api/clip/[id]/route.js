@@ -11,10 +11,9 @@ export async function GET(request, { params }) {
       "unknown";
 
     const rateLimitResult = await checkRateLimit(apiLimiter, ip);
-
     if (!rateLimitResult.success) {
       return NextResponse.json(
-        { error: "Too many requests. Please wait." },
+        { error: "Too many requests." },
         { status: 429 },
       );
     }
@@ -29,7 +28,6 @@ export async function GET(request, { params }) {
     }
 
     const clipDataRaw = await redis.get(`clip:${id}`);
-
     if (!clipDataRaw) {
       return NextResponse.json(
         { error: "Clip not found or has expired" },
@@ -58,12 +56,14 @@ export async function GET(request, { params }) {
       success: true,
       clip: {
         type: clipData.type,
-        content: clipData.content,
+        content: clipData.content || null,
         fileName: clipData.fileName || null,
         fileType: clipData.fileType || null,
         fileSize: clipData.fileSize || null,
+        files: clipData.files || null,
+        fileCount: clipData.fileCount || null,
       },
-      remainingMs: remainingMs,
+      remainingMs,
     });
   } catch (error) {
     console.error("Error fetching clip:", error);

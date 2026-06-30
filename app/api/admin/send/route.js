@@ -1,23 +1,27 @@
+// ============================================
+// API: POST /api/admin/send — Send to Telegram
+// Supports: text, single file, bulk files (queue)
+// Feature #6: Smart queue for bulk > 4.5MB
+// ============================================
+
 import { NextResponse } from "next/server";
 import { sendTextToTelegram, sendFileToTelegram } from "@/lib/telegram";
-import { validateAdminFile, sanitizeText } from "@/lib/security";
+import { validateFile, sanitizeText } from "@/lib/security";
 import { checkRateLimit, apiLimiter } from "@/lib/rateLimiter";
-import { ADMIN_MAX_TEXT_LENGTH } from "@/lib/constants";
+import {
+  ADMIN_MAX_TEXT_LENGTH,
+  ADMIN_MAX_FILE_SIZE,
+  MAX_FILES_COUNT,
+} from "@/lib/constants";
 import crypto from "crypto";
 
 function verifyAdminSession(request) {
   const cookie = request.cookies.get("admin_session");
-
-  if (!cookie || !cookie.value) {
-    return false;
-  }
+  if (!cookie || !cookie.value) return false;
 
   const signedToken = cookie.value;
   const parts = signedToken.split(".");
-
-  if (parts.length !== 2) {
-    return false;
-  }
+  if (parts.length !== 2) return false;
 
   const [token, signature] = parts;
   const sessionSecret = process.env.SESSION_SECRET;
@@ -62,13 +66,14 @@ export async function POST(request) {
     const formData = await request.formData();
     const type = formData.get("type");
 
-    if (!type || !["text", "file"].includes(type)) {
+    if (!type || !["text", "file", "bulk"].includes(type)) {
       return NextResponse.json(
         { error: "Invalid request type" },
         { status: 400 },
       );
     }
 
+    // ─── TEXT ───
     if (type === "text") {
       const text = formData.get("content");
 
@@ -81,7 +86,7 @@ export async function POST(request) {
 
       if (text.length > ADMIN_MAX_TEXT_LENGTH) {
         return NextResponse.json(
-          { error: "Text too long. Admin limit is 4.5MB" },
+          { error: "Text too long. Max 4.5MB" },
           { status: 400 },
         );
       }
@@ -94,7 +99,6 @@ export async function POST(request) {
         await sendTextToTelegram(
           `📋 <b>Admin Clipboard</b> (large text - sending as file)`,
         );
-
         const buffer = Buffer.from(sanitized, "utf-8");
         await sendFileToTelegram(
           buffer,
@@ -106,8 +110,10 @@ export async function POST(request) {
 
       return NextResponse.json({
         success: true,
-        message: "Text sent to Telegram",
+        message: "✅ Text sent to Telegram!",
       });
+
+      // ─── SINGLE FILE ───
     } else if (type === "file") {
       const file = formData.get("file");
 
@@ -118,26 +124,92 @@ export async function POST(request) {
         );
       }
 
-      const validation = validateAdminFile(file);
+      const validation = validateFile(file, ADMIN_MAX_FILE_SIZE);
       if (!validation.valid) {
         return NextResponse.json({ error: validation.error }, { status: 400 });
       }
 
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-
       const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
 
       await sendFileToTelegram(
         buffer,
         file.name,
-        file.type,
+        file.type || "application/octet-stream",
         `📎 Admin Upload\n📁 ${file.name}\n💾 ${fileSizeMB}MB`,
       );
 
       return NextResponse.json({
         success: true,
-        message: "File sent to Telegram",
+        message: "✅ File sent to Telegram!",
+      });
+
+      // ─── BULK FILES (Smart Queue — Feature #6) ───
+    } else if (type === "bulk") {
+      const files = formData.getAll("files");
+
+      if (!files || files.length === 0) {
+        return NextResponse.json(
+          { error: "No files provided" },
+          { status: 400 },
+        );
+      }
+
+      if (files.length > MAX_FILES_COUNT) {
+        return NextResponse.json(
+          { error: `Maximum ${MAX_FILES_COUNT} files allowed` },
+          { status: 400 },
+        );
+      }
+
+      const sent = [];
+      const failed = [];
+
+      // Send header message
+      await sendTextToTelegram(
+        `📦 <b>Bulk Upload</b> (${files.length} files incoming...)`,
+      );
+
+      // Smart queue: send each file individually
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+
+        try {
+          // Validate individual file
+          const validation = validateFile(file, ADMIN_MAX_FILE_SIZE);
+          if (!validation.valid) {
+            failed.push({ name: file.name, reason: validation.error });
+            continue;
+          }
+
+          const arrayBuffer = await file.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+
+          await sendFileToTelegram(
+            buffer,
+            file.name,
+            file.type || "application/octet-stream",
+            `📎 File ${i + 1}/${files.length}\n📁 ${file.name}\n💾 ${fileSizeMB}MB`,
+          );
+
+          sent.push(file.name);
+
+          // Small delay between sends to avoid Telegram rate limits
+          if (i < files.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } catch (err) {
+          failed.push({ name: file.name, reason: err.message });
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `✅ ${sent.length}/${files.length} files sent to Telegram!`,
+        sentFiles: sent,
+        failedFiles: failed.length > 0 ? failed : undefined,
       });
     }
   } catch (error) {

@@ -1,49 +1,36 @@
+// ============================================
+// ROOT LAYOUT — Wraps every page
+// ============================================
+// WHAT: This is the outer shell of your website.
+// Every page (home, clip, admin) lives inside this.
+// It includes the metadata (title, description)
+// and the global styles.
+
 import "./globals.css";
-import Script from "next/script";
 
 export const metadata = {
-  title: "Secure Clipboard - Temporary Private Sharing",
-  description:
-    "Share text and files securely with auto deletion. No login required.",
-  verification: {
-    google: "0w4cn1BIsmpmt36bKM2CByPcfrw59jvfJ5Hw0gY2I0U",
-  },
-  robots: {
-    index: true,
-    follow: true,
-  },
+  title: "Secure Clipboard",
+  description: "Share text and files securely with auto-expiry",
+  // Prevent search engines from indexing (privacy)
+  robots: "noindex, nofollow",
 };
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>
-        <main
-          style={{
-            maxWidth: "896px",
-            margin: "0 auto",
-            padding: "32px 16px",
-            minHeight: "100vh",
-          }}
-        >
+      <body
+        className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 
+                       dark:from-gray-900 dark:to-gray-800"
+      >
+        {/* Main content area */}
+        <main className="container mx-auto px-4 py-8 max-w-4xl">
           {children}
         </main>
-        <footer
-          style={{
-            textAlign: "center",
-            padding: "32px",
-            color: "var(--secondary)",
-            fontSize: "14px",
-          }}
-        >
+
+        {/* Footer */}
+        <footer className="text-center py-8 text-gray-500 text-sm">
           <p>🔒 Secure Clipboard • Auto-expires in 10 minutes</p>
         </footer>
-
-        {/* Midas Touch Analytics */}
-        <Script
-          src="https://midas-touch-analytics.onrender.com/tracker.js"
-          data-id="site_ffbe3e80"
-          strategy="afterInteractive"
-        />
       </body>
     </html>
   );

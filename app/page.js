@@ -3,16 +3,19 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 
 export default function Home() {
+  // ─── State ───
   const [activeTab, setActiveTab] = useState("create");
   const [inputType, setInputType] = useState("text");
   const [textValue, setTextValue] = useState("");
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [timeLeft, setTimeLeft] = useState(null);
+  const [toasts, setToasts] = useState([]);
 
+  // Retrieve State
   const [retrieveCode, setRetrieveCode] = useState("");
   const [retrieveResult, setRetrieveResult] = useState(null);
   const [retrieveError, setRetrieveError] = useState("");
@@ -20,7 +23,18 @@ export default function Home() {
   const [retrieveTimeLeft, setRetrieveTimeLeft] = useState(null);
 
   const fileInputRef = useRef(null);
+  const MAX_FILES = 10;
 
+  // ─── Toast System ───
+  const addToast = (message, type = "error") => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  };
+
+  // ─── Countdown Timers ───
   useEffect(() => {
     if (!timeLeft || timeLeft <= 0) return;
     const timer = setInterval(() => {
@@ -57,61 +71,99 @@ export default function Home() {
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  // ─── Handle Files (shared logic) ───
+  const handleNewFiles = useCallback((newFiles) => {
+    const fileArray = Array.from(newFiles);
+    const maxMB = 4.5;
+
+    setSelectedFiles((prev) => {
+      const totalSlots = MAX_FILES - prev.length;
+
+      if (totalSlots <= 0) {
+        addToast(
+          `Maximum ${MAX_FILES} files allowed. No more files can be added.`,
+        );
+        return prev;
+      }
+
+      const accepted = fileArray.slice(0, totalSlots);
+      const rejected = fileArray.slice(totalSlots);
+
+      if (rejected.length > 0) {
+        rejected.forEach((f) => {
+          addToast(`❌ ${f.name} — Skipped (max ${MAX_FILES} files)`);
+        });
+      }
+
+      return [...prev, ...accepted];
+    });
+
+    setError("");
+  }, []);
+
+  // ─── Drag & Drop ───
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
   }, []);
-
   const handleDragLeave = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
   }, []);
-
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
+  const handleDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      if (inputType !== "file") return;
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) handleNewFiles(files);
+    },
+    [inputType, handleNewFiles],
+  );
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      setSelectedFile(files[0]);
-      setError("");
-    }
-  }, []);
-
+  // ─── Paste Detection ───
   useEffect(() => {
     const handlePaste = (e) => {
       if (activeTab !== "create" || inputType !== "file") return;
       const items = e.clipboardData?.items;
       if (!items) return;
+      const files = [];
       for (let item of items) {
         if (item.kind === "file") {
           const file = item.getAsFile();
-          if (file) {
-            setSelectedFile(file);
-            setError("");
-            e.preventDefault();
-            return;
-          }
+          if (file) files.push(file);
         }
+      }
+      if (files.length > 0) {
+        handleNewFiles(files);
+        e.preventDefault();
       }
     };
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [activeTab, inputType]);
+  }, [activeTab, inputType, handleNewFiles]);
 
+  // ─── Remove a file ───
+  const removeFile = (index) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ─── Create Clip ───
   const handleCreate = async () => {
     setIsLoading(true);
     setError("");
     setResult(null);
+
     try {
       const formData = new FormData();
+
       if (inputType === "text") {
         if (!textValue.trim()) {
           setError("Please enter some text");
@@ -121,13 +173,21 @@ export default function Home() {
         formData.append("type", "text");
         formData.append("content", textValue);
       } else {
-        if (!selectedFile) {
-          setError("Please select a file");
+        if (selectedFiles.length === 0) {
+          setError("Please select files");
           setIsLoading(false);
           return;
         }
-        formData.append("type", "file");
-        formData.append("file", selectedFile);
+
+        if (selectedFiles.length === 1) {
+          formData.append("type", "file");
+          formData.append("file", selectedFiles[0]);
+        } else {
+          formData.append("type", "bulk");
+          selectedFiles.forEach((file) => {
+            formData.append("files", file);
+          });
+        }
       }
 
       const response = await fetch("/api/clip", {
@@ -135,17 +195,31 @@ export default function Home() {
         body: formData,
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Something went wrong");
+
+      if (!response.ok) {
+        if (data.rejected && data.rejected.length > 0) {
+          data.rejected.forEach((r) => addToast(`❌ ${r.reason}`));
+        }
+        throw new Error(data.error || "Something went wrong");
+      }
+
+      // Show rejected files from bulk upload
+      if (data.rejectedFiles && data.rejectedFiles.length > 0) {
+        data.rejectedFiles.forEach((r) =>
+          addToast(`⚠️ ${r.reason}`, "warning"),
+        );
+      }
 
       setResult({
         id: data.id,
         code: data.code,
         expiresAt: data.expiresAt,
         link: `${window.location.origin}/clip/${data.id}`,
+        acceptedCount: data.acceptedCount,
       });
       setTimeLeft(data.expiresAt - Date.now());
       setTextValue("");
-      setSelectedFile(null);
+      setSelectedFiles([]);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -153,10 +227,13 @@ export default function Home() {
     }
   };
 
+  // ─── Retrieve ───
   const handleRetrieve = async () => {
+    if (!retrieveCode.trim()) return;
     setRetrieveLoading(true);
     setRetrieveError("");
     setRetrieveResult(null);
+
     try {
       const response = await fetch("/api/retrieve", {
         method: "POST",
@@ -173,6 +250,8 @@ export default function Home() {
         fileName: data.clip.fileName,
         fileType: data.clip.fileType,
         fileSize: data.clip.fileSize,
+        files: data.clip.files,
+        fileCount: data.clip.fileCount,
       });
       setRetrieveTimeLeft(data.remainingMs);
     } catch (err) {
@@ -182,10 +261,16 @@ export default function Home() {
     }
   };
 
+  // Feature #4: Enter key triggers retrieve
+  const handleRetrieveKeyDown = (e) => {
+    if (e.key === "Enter") handleRetrieve();
+  };
+
+  // ─── Helpers ───
   const copyToClipboard = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
-      alert("✅ Copied!");
+      addToast("✅ Copied to clipboard!", "success");
     } catch {
       const ta = document.createElement("textarea");
       ta.value = text;
@@ -193,7 +278,7 @@ export default function Home() {
       ta.select();
       document.execCommand("copy");
       document.body.removeChild(ta);
-      alert("✅ Copied!");
+      addToast("✅ Copied to clipboard!", "success");
     }
   };
 
@@ -204,12 +289,63 @@ export default function Home() {
     link.click();
   };
 
+  const formatFileSize = (bytes) => {
+    if (!bytes) return "0 B";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  };
+
+  const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+
   return (
     <div
       className="animate-fade-in"
       style={{ display: "flex", flexDirection: "column", gap: "32px" }}
     >
-      {}
+      {/* ─── Toast Container ─── */}
+      <div
+        style={{
+          position: "fixed",
+          top: "16px",
+          right: "16px",
+          zIndex: 1000,
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          maxWidth: "400px",
+        }}
+      >
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className="animate-fade-in"
+            style={{
+              padding: "12px 16px",
+              borderRadius: "8px",
+              fontSize: "14px",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              backgroundColor:
+                toast.type === "success"
+                  ? "#dcfce7"
+                  : toast.type === "warning"
+                    ? "#fef9c3"
+                    : "#fee2e2",
+              color:
+                toast.type === "success"
+                  ? "#166534"
+                  : toast.type === "warning"
+                    ? "#854d0e"
+                    : "#991b1b",
+              border: `1px solid ${toast.type === "success" ? "#bbf7d0" : toast.type === "warning" ? "#fde68a" : "#fecaca"}`,
+            }}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
+      {/* ─── Header ─── */}
       <div style={{ textAlign: "center" }}>
         <h1
           style={{
@@ -218,32 +354,20 @@ export default function Home() {
             marginBottom: "8px",
           }}
         >
-          Secure Clipboard — Temporary Private Text & File Sharing
+          📋 Secure Clipboard
         </h1>
-
-        <p
-          style={{
-            color: "var(--secondary)",
-            maxWidth: "600px",
-            margin: "0 auto",
-          }}
-        >
-          Share text, code, and files securely with automatic deletion after 10
-          minutes. No login required. No tracking. Fast and private sharing.
-        </p>
-
-        <p style={{ marginTop: "8px", fontSize: "14px", opacity: 0.7 }}>
-          No signup required • Auto-delete • Max 700KB
+        <p style={{ color: "var(--secondary)" }}>
+          Share text and files securely • Auto-expires in 10 minutes
         </p>
       </div>
 
-      {}
+      {/* ─── Tabs ─── */}
       <div style={{ display: "flex", justifyContent: "center", gap: "16px" }}>
         <button
           onClick={() => setActiveTab("create")}
           className={`tab-button ${activeTab === "create" ? "active" : "inactive"}`}
         >
-          ✏️ Create Secure Clip
+          ✏️ Create Clip
         </button>
         <button
           onClick={() => setActiveTab("retrieve")}
@@ -253,13 +377,12 @@ export default function Home() {
         </button>
       </div>
 
-      {}
+      {/* ═══ CREATE TAB ═══ */}
       {activeTab === "create" && (
         <div
           className="card"
           style={{ display: "flex", flexDirection: "column", gap: "24px" }}
         >
-          {}
           <div
             style={{ display: "flex", justifyContent: "center", gap: "16px" }}
           >
@@ -273,63 +396,57 @@ export default function Home() {
               onClick={() => setInputType("file")}
               className={`type-button ${inputType === "file" ? "active" : "inactive"}`}
             >
-              📎 File
+              📎 Files
             </button>
           </div>
 
-          {}
           {inputType === "text" && (
             <textarea
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
-              placeholder="Paste text for secure temporary sharing..."
+              placeholder="Paste or type your text here..."
               className="input-field"
               style={{ height: "192px", resize: "none" }}
               disabled={isLoading}
             />
           )}
 
-          {}
           {inputType === "file" && (
-            <div
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`drop-zone ${isDragging ? "active" : ""}`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  if (e.target.files?.[0]) {
-                    setSelectedFile(e.target.files[0]);
-                    setError("");
-                  }
-                }}
-                disabled={isLoading}
-              />
-              <div>
-                <p style={{ fontSize: "2.5rem", marginBottom: "8px" }}>
-                  {isDragging ? "📥" : selectedFile ? "✅" : "📁"}
-                </p>
-                <p style={{ fontWeight: "500" }}>
-                  {selectedFile
-                    ? selectedFile.name
-                    : "Drag & drop or click to upload"}
-                </p>
-                <p
-                  style={{
-                    fontSize: "13px",
-                    color: "var(--secondary)",
-                    marginTop: "4px",
+            <div>
+              <div
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`drop-zone ${isDragging ? "active" : ""}`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    if (files.length > MAX_FILES) {
+                      addToast(
+                        `Maximum ${MAX_FILES} files. Only first ${MAX_FILES} selected.`,
+                      );
+                    }
+                    handleNewFiles(e.target.files);
+                    e.target.value = "";
                   }}
-                >
-                  Max 700KB • Text, code, PDF, documents only
-                </p>
-                {selectedFile && (
+                  disabled={isLoading}
+                />
+                <div>
+                  <p style={{ fontSize: "2.5rem", marginBottom: "8px" }}>
+                    {isDragging ? "📥" : selectedFiles.length > 0 ? "✅" : "📁"}
+                  </p>
+                  <p style={{ fontWeight: "500" }}>
+                    {selectedFiles.length > 0
+                      ? `${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} selected`
+                      : "Drag & drop, paste (Ctrl+V), or click to upload"}
+                  </p>
                   <p
                     style={{
                       fontSize: "13px",
@@ -337,14 +454,85 @@ export default function Home() {
                       marginTop: "4px",
                     }}
                   >
-                    {(selectedFile.size / 1024).toFixed(1)} KB
+                    Max 10 files • Total max 4.5MB • All file types
                   </p>
-                )}
+                </div>
               </div>
+
+              {/* File List */}
+              {selectedFiles.length > 0 && (
+                <div
+                  style={{
+                    marginTop: "12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                  }}
+                >
+                  {selectedFiles.map((file, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                        backgroundColor: "var(--card-bg)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p
+                          style={{
+                            fontWeight: "500",
+                            fontSize: "14px",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          📄 {file.name}
+                        </p>
+                        <p
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--secondary)",
+                          }}
+                        >
+                          {formatFileSize(file.size)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => removeFile(index)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--error)",
+                          cursor: "pointer",
+                          fontSize: "18px",
+                          padding: "4px 8px",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <p
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--secondary)",
+                      textAlign: "right",
+                    }}
+                  >
+                    Total: {formatFileSize(totalSize)} / 4.5 MB •{" "}
+                    {selectedFiles.length}/{MAX_FILES} files
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
-          {}
           {error && (
             <div
               className="badge-error"
@@ -354,7 +542,6 @@ export default function Home() {
             </div>
           )}
 
-          {}
           <button
             onClick={handleCreate}
             disabled={isLoading}
@@ -364,21 +551,25 @@ export default function Home() {
             {isLoading ? "🔄 Processing..." : "🚀 Generate Link"}
           </button>
 
-          {}
           {result && (
             <div
               className="result-box success"
               style={{ display: "flex", flexDirection: "column", gap: "16px" }}
             >
-              {}
-              <div>
+              {result.acceptedCount && (
                 <p
                   style={{
+                    textAlign: "center",
+                    color: "var(--success)",
                     fontWeight: "500",
-                    marginBottom: "8px",
-                    color: "var(--foreground)",
                   }}
                 >
+                  ✅ {result.acceptedCount} file
+                  {result.acceptedCount > 1 ? "s" : ""} uploaded!
+                </p>
+              )}
+              <div>
+                <p style={{ fontWeight: "500", marginBottom: "8px" }}>
                   🔗 Share Link:
                 </p>
                 <div style={{ display: "flex", gap: "8px" }}>
@@ -398,16 +589,8 @@ export default function Home() {
                   </button>
                 </div>
               </div>
-
-              {}
               <div>
-                <p
-                  style={{
-                    fontWeight: "500",
-                    marginBottom: "8px",
-                    color: "var(--foreground)",
-                  }}
-                >
+                <p style={{ fontWeight: "500", marginBottom: "8px" }}>
                   🔢 Retrieval Code:
                 </p>
                 <div style={{ display: "flex", gap: "8px" }}>
@@ -419,8 +602,8 @@ export default function Home() {
                     style={{
                       textAlign: "center",
                       fontFamily: "monospace",
-                      fontSize: "1.25rem",
-                      letterSpacing: "0.15em",
+                      fontSize: "1.5rem",
+                      letterSpacing: "0.2em",
                     }}
                   />
                   <button
@@ -432,8 +615,6 @@ export default function Home() {
                   </button>
                 </div>
               </div>
-
-              {}
               {timeLeft !== null && timeLeft > 0 && (
                 <div style={{ textAlign: "center" }}>
                   <p style={{ fontSize: "13px", color: "var(--secondary)" }}>
@@ -442,7 +623,6 @@ export default function Home() {
                   <p className="countdown">{formatTime(timeLeft)}</p>
                 </div>
               )}
-
               {timeLeft !== null && timeLeft <= 0 && (
                 <div style={{ textAlign: "center" }}>
                   <p className="badge-error">⏰ This clip has expired</p>
@@ -453,7 +633,7 @@ export default function Home() {
         </div>
       )}
 
-      {}
+      {/* ═══ RETRIEVE TAB ═══ */}
       {activeTab === "retrieve" && (
         <div
           className="card"
@@ -465,7 +645,6 @@ export default function Home() {
                 fontWeight: "500",
                 display: "block",
                 marginBottom: "8px",
-                color: "var(--foreground)",
               }}
             >
               Enter Retrieval Code:
@@ -473,18 +652,22 @@ export default function Home() {
             <input
               type="text"
               value={retrieveCode}
-              onChange={(e) => setRetrieveCode(e.target.value.toUpperCase())}
-              placeholder="e.g., X7K9P2"
+              onChange={(e) =>
+                setRetrieveCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              onKeyDown={handleRetrieveKeyDown}
+              placeholder="e.g., 847293"
               className="input-field"
               style={{
                 textAlign: "center",
                 fontFamily: "monospace",
-                fontSize: "1.25rem",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
+                fontSize: "1.5rem",
+                letterSpacing: "0.2em",
               }}
               maxLength={6}
               disabled={retrieveLoading}
+              inputMode="numeric"
+              pattern="[0-9]*"
             />
           </div>
 
@@ -511,7 +694,6 @@ export default function Home() {
               className="result-box info"
               style={{ display: "flex", flexDirection: "column", gap: "16px" }}
             >
-              {}
               {retrieveTimeLeft !== null && retrieveTimeLeft > 0 && (
                 <div style={{ textAlign: "center" }}>
                   <p style={{ fontSize: "13px", color: "var(--secondary)" }}>
@@ -528,7 +710,7 @@ export default function Home() {
                 </div>
               )}
 
-              {}
+              {/* Text */}
               {retrieveResult.type === "text" && (
                 <div>
                   <div
@@ -554,7 +736,7 @@ export default function Home() {
                 </div>
               )}
 
-              {}
+              {/* Single File */}
               {retrieveResult.type === "file" && (
                 <div style={{ textAlign: "center" }}>
                   <p style={{ fontSize: "3rem", marginBottom: "8px" }}>📄</p>
@@ -568,7 +750,7 @@ export default function Home() {
                       marginTop: "4px",
                     }}
                   >
-                    {(retrieveResult.fileSize / 1024).toFixed(1)} KB
+                    {formatFileSize(retrieveResult.fileSize)}
                   </p>
                   <button
                     onClick={() =>
@@ -581,8 +763,64 @@ export default function Home() {
                     className="btn-primary"
                     style={{ marginTop: "16px" }}
                   >
-                    ⬇️ Download File
+                    ⬇️ Download
                   </button>
+                </div>
+              )}
+
+              {/* Bulk Files */}
+              {retrieveResult.type === "bulk" && retrieveResult.files && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                  }}
+                >
+                  <p style={{ fontWeight: "500", textAlign: "center" }}>
+                    📦 {retrieveResult.fileCount} Files
+                  </p>
+                  {retrieveResult.files.map((file, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px",
+                        borderRadius: "8px",
+                        backgroundColor: "var(--card-bg)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      <div>
+                        <p style={{ fontWeight: "500", fontSize: "14px" }}>
+                          📄 {file.fileName}
+                        </p>
+                        <p
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--secondary)",
+                          }}
+                        >
+                          {formatFileSize(file.fileSize)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() =>
+                          downloadFile(
+                            file.content,
+                            file.fileName,
+                            file.fileType,
+                          )
+                        }
+                        className="btn-secondary"
+                        style={{ padding: "8px 12px", fontSize: "13px" }}
+                      >
+                        ⬇️
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -590,48 +828,8 @@ export default function Home() {
         </div>
       )}
 
-      {}
-      <div
-        style={{ maxWidth: "700px", margin: "40px auto", textAlign: "center" }}
-      >
-        <h2 style={{ marginBottom: "12px" }}>
-          🔐 Secure Clipboard for Temporary File Sharing
-        </h2>
-
-        <p style={{ color: "var(--secondary)", marginBottom: "10px" }}>
-          Secure Clipboard is a private pastebin alternative that lets you share
-          text, code, and files with automatic deletion after 10 minutes.
-        </p>
-
-        <p style={{ color: "var(--secondary)" }}>
-          Ideal for developers, students, and professionals who need fast,
-          private, and temporary file sharing without leaving traces online.
-        </p>
-      </div>
+      {/* Admin Link */}
       <div style={{ textAlign: "center" }}>
-        <div
-          style={{
-            maxWidth: "700px",
-            margin: "40px auto",
-            textAlign: "center",
-          }}
-        >
-          <h2>⚡ How it works</h2>
-
-          <p style={{ color: "var(--secondary)" }}>
-            1. Create a secure clipboard by adding text or uploading a file
-          </p>
-          <p style={{ color: "var(--secondary)" }}>
-            2.Share the link or retrieval code
-          </p>
-          <p style={{ color: "var(--secondary)" }}>
-            3. Your data automatically delete after 10 minutes
-          </p>
-
-          <p style={{ color: "var(--secondary)", marginTop: "10px" }}>
-            No login, no storage, no tracking — just fast and private sharing.
-          </p>
-        </div>
         <a href="/admin" className="link-subtle">
           🔐 Admin Access
         </a>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 export default function AdminPage() {
@@ -14,32 +14,37 @@ export default function AdminPage() {
 
   const [inputType, setInputType] = useState("text");
   const [textValue, setTextValue] = useState("");
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendResult, setSendResult] = useState("");
   const [sendError, setSendError] = useState("");
+  const [toasts, setToasts] = useState([]);
+  const [sendProgress, setSendProgress] = useState("");
 
   const fileInputRef = useRef(null);
+  const MAX_FILES = 10;
+
+  const addToast = (message, type = "error") => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginLoading(true);
     setLoginError("");
-
     try {
       const response = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Login failed");
-      }
-
+      if (!response.ok) throw new Error(data.error || "Login failed");
       setIsLoggedIn(true);
       setUsername("");
       setPassword("");
@@ -50,38 +55,89 @@ export default function AdminPage() {
     }
   };
 
+  // ─── File Handling (with paste support — Feature #3) ───
+  const handleNewFiles = useCallback((newFiles) => {
+    const fileArray = Array.from(newFiles);
+    setSelectedFiles((prev) => {
+      const totalSlots = MAX_FILES - prev.length;
+      if (totalSlots <= 0) {
+        addToast(`Maximum ${MAX_FILES} files allowed.`);
+        return prev;
+      }
+      const accepted = fileArray.slice(0, totalSlots);
+      const rejected = fileArray.slice(totalSlots);
+      rejected.forEach((f) =>
+        addToast(`❌ ${f.name} — Skipped (max ${MAX_FILES} files)`),
+      );
+      return [...prev, ...accepted];
+    });
+    setSendError("");
+  }, []);
+
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
   }, []);
-
   const handleDragLeave = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
   }, []);
-
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
   }, []);
+  const handleDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      if (e.dataTransfer.files?.length > 0)
+        handleNewFiles(e.dataTransfer.files);
+    },
+    [handleNewFiles],
+  );
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      setSelectedFile(files[0]);
-      setSendError("");
-    }
-  }, []);
+  // Feature #3: Paste support for admin
+  useEffect(() => {
+    const handlePaste = (e) => {
+      if (!isLoggedIn || inputType !== "file") return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files = [];
+      for (let item of items) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        handleNewFiles(files);
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [isLoggedIn, inputType, handleNewFiles]);
 
+  const removeFile = (index) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return "0 B";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  };
+
+  // ─── Send to Telegram (with smart queue — Feature #6) ───
   const handleSend = async () => {
     setIsSending(true);
     setSendError("");
     setSendResult("");
+    setSendProgress("");
 
     try {
       const formData = new FormData();
@@ -95,20 +151,27 @@ export default function AdminPage() {
         formData.append("type", "text");
         formData.append("content", textValue);
       } else {
-        if (!selectedFile) {
-          setSendError("Please select a file");
+        if (selectedFiles.length === 0) {
+          setSendError("Please select files");
           setIsSending(false);
           return;
         }
-        formData.append("type", "file");
-        formData.append("file", selectedFile);
+
+        if (selectedFiles.length === 1) {
+          formData.append("type", "file");
+          formData.append("file", selectedFiles[0]);
+        } else {
+          // Feature #6: Smart queue — send as bulk, server handles queue
+          formData.append("type", "bulk");
+          setSendProgress(`Uploading ${selectedFiles.length} files...`);
+          selectedFiles.forEach((file) => formData.append("files", file));
+        }
       }
 
       const response = await fetch("/api/admin/send", {
         method: "POST",
         body: formData,
       });
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -120,12 +183,23 @@ export default function AdminPage() {
       }
 
       setSendResult(data.message || "✅ Sent to Telegram!");
+
+      if (data.failedFiles && data.failedFiles.length > 0) {
+        data.failedFiles.forEach((f) => addToast(`❌ ${f.name}: ${f.reason}`));
+      }
+      if (data.sentFiles && data.sentFiles.length > 0) {
+        data.sentFiles.forEach((name) =>
+          addToast(`✅ ${name} sent`, "success"),
+        );
+      }
+
       setTextValue("");
-      setSelectedFile(null);
+      setSelectedFiles([]);
     } catch (err) {
       setSendError(err.message);
     } finally {
       setIsSending(false);
+      setSendProgress("");
     }
   };
 
@@ -136,6 +210,7 @@ export default function AdminPage() {
     router.push("/");
   };
 
+  // ═══ LOGIN SCREEN ═══
   if (!isLoggedIn) {
     return (
       <div
@@ -156,7 +231,6 @@ export default function AdminPage() {
             gap: "24px",
           }}
         >
-          {}
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: "3.5rem", marginBottom: "12px" }}>🔐</div>
             <h1 style={{ fontSize: "1.5rem", fontWeight: "700" }}>
@@ -172,15 +246,9 @@ export default function AdminPage() {
               Authorized access only
             </p>
           </div>
-
-          {}
           <form
             onSubmit={handleLogin}
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "16px",
-            }}
+            style={{ display: "flex", flexDirection: "column", gap: "16px" }}
           >
             <div>
               <label
@@ -189,7 +257,6 @@ export default function AdminPage() {
                   fontSize: "14px",
                   fontWeight: "500",
                   marginBottom: "6px",
-                  color: "var(--foreground)",
                 }}
               >
                 Username
@@ -205,7 +272,6 @@ export default function AdminPage() {
                 autoComplete="username"
               />
             </div>
-
             <div>
               <label
                 style={{
@@ -213,7 +279,6 @@ export default function AdminPage() {
                   fontSize: "14px",
                   fontWeight: "500",
                   marginBottom: "6px",
-                  color: "var(--foreground)",
                 }}
               >
                 Password
@@ -229,7 +294,6 @@ export default function AdminPage() {
                 autoComplete="current-password"
               />
             </div>
-
             {loginError && (
               <div
                 className="badge-error"
@@ -238,7 +302,6 @@ export default function AdminPage() {
                 {loginError}
               </div>
             )}
-
             <button
               type="submit"
               disabled={loginLoading}
@@ -248,8 +311,6 @@ export default function AdminPage() {
               {loginLoading ? "🔄 Logging in..." : "🔑 Login"}
             </button>
           </form>
-
-          {}
           <div style={{ textAlign: "center" }}>
             <button onClick={() => router.push("/")} className="link-subtle">
               ← Back to Home
@@ -260,6 +321,7 @@ export default function AdminPage() {
     );
   }
 
+  // ═══ ADMIN DASHBOARD ═══
   return (
     <div
       className="animate-fade-in"
@@ -271,7 +333,38 @@ export default function AdminPage() {
         gap: "24px",
       }}
     >
-      {}
+      {/* Toasts */}
+      <div
+        style={{
+          position: "fixed",
+          top: "16px",
+          right: "16px",
+          zIndex: 1000,
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          maxWidth: "400px",
+        }}
+      >
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className="animate-fade-in"
+            style={{
+              padding: "12px 16px",
+              borderRadius: "8px",
+              fontSize: "14px",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              backgroundColor: toast.type === "success" ? "#dcfce7" : "#fee2e2",
+              color: toast.type === "success" ? "#166534" : "#991b1b",
+            }}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
+      {/* Header */}
       <div
         style={{
           display: "flex",
@@ -304,21 +397,17 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {}
       <div className="result-box warning-box">
         <p style={{ fontSize: "14px", color: "var(--primary)" }}>
-          ℹ️ <strong>Admin Mode:</strong> Content is sent directly to your
-          Telegram. Nothing is stored on the server. No link or code is
-          generated. Max file size: 4.5MB.
+          ℹ️ <strong>Admin Mode:</strong> Content sent directly to Telegram.
+          Nothing stored. Max 4.5MB per file. Up to 10 files (sent in queue).
         </p>
       </div>
 
-      {}
       <div
         className="card"
         style={{ display: "flex", flexDirection: "column", gap: "24px" }}
       >
-        {}
         <div style={{ display: "flex", justifyContent: "center", gap: "16px" }}>
           <button
             onClick={() => setInputType("text")}
@@ -332,11 +421,10 @@ export default function AdminPage() {
             className={`type-button ${inputType === "file" ? "active" : "inactive"}`}
             style={{ padding: "12px 24px", fontSize: "16px" }}
           >
-            📎 File
+            📎 Files
           </button>
         </div>
 
-        {}
         {inputType === "text" && (
           <div>
             <label
@@ -345,7 +433,6 @@ export default function AdminPage() {
                 fontSize: "14px",
                 fontWeight: "500",
                 marginBottom: "8px",
-                color: "var(--foreground)",
               }}
             >
               Message to send:
@@ -371,97 +458,122 @@ export default function AdminPage() {
           </div>
         )}
 
-        {}
         {inputType === "file" && (
-          <div
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`drop-zone ${isDragging ? "active" : ""}`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                if (e.target.files?.[0]) {
-                  setSelectedFile(e.target.files[0]);
-                  setSendError("");
-                }
-              }}
-              disabled={isSending}
-            />
-            <div>
-              <p style={{ fontSize: "3rem", marginBottom: "8px" }}>
-                {isDragging ? "📥" : selectedFile ? "✅" : "📁"}
-              </p>
-
-              {selectedFile ? (
-                <div>
-                  <p style={{ fontWeight: "500", fontSize: "1rem" }}>
-                    {selectedFile.name}
-                  </p>
-                  <p
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--secondary)",
-                      marginTop: "4px",
-                    }}
-                  >
-                    {(selectedFile.size / 1024).toFixed(1)} KB
-                    {selectedFile.size > 1024 * 1024 &&
-                      ` (${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB)`}
-                  </p>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedFile(null);
-                    }}
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--error)",
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      textDecoration: "underline",
-                      marginTop: "8px",
-                    }}
-                  >
-                    ✕ Remove
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <p style={{ fontWeight: "500" }}>
-                    {isDragging
-                      ? "Drop file here!"
-                      : "Drag & drop or click to upload"}
-                  </p>
-                  <p
-                    style={{
-                      fontSize: "13px",
-                      color: "var(--secondary)",
-                      marginTop: "4px",
-                    }}
-                  >
-                    Max 4.5MB • All file types accepted
-                  </p>
-                </div>
-              )}
+          <div>
+            <div
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`drop-zone ${isDragging ? "active" : ""}`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files) handleNewFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                disabled={isSending}
+              />
+              <div>
+                <p style={{ fontSize: "3rem", marginBottom: "8px" }}>
+                  {isDragging ? "📥" : selectedFiles.length > 0 ? "✅" : "📁"}
+                </p>
+                <p style={{ fontWeight: "500" }}>
+                  {selectedFiles.length > 0
+                    ? `${selectedFiles.length} file${selectedFiles.length > 1 ? "s" : ""} selected`
+                    : "Drag & drop, paste (Ctrl+V), or click to upload"}
+                </p>
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--secondary)",
+                    marginTop: "4px",
+                  }}
+                >
+                  Max 10 files • 4.5MB each • All file types • Smart queue
+                </p>
+              </div>
             </div>
+
+            {selectedFiles.length > 0 && (
+              <div
+                style={{
+                  marginTop: "12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                }}
+              >
+                {selectedFiles.map((file, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      backgroundColor: "var(--card-bg)",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p
+                        style={{
+                          fontWeight: "500",
+                          fontSize: "14px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        📄 {file.name}
+                      </p>
+                      <p
+                        style={{ fontSize: "12px", color: "var(--secondary)" }}
+                      >
+                        {formatFileSize(file.size)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => removeFile(index)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--error)",
+                        cursor: "pointer",
+                        fontSize: "18px",
+                        padding: "4px 8px",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--secondary)",
+                    textAlign: "right",
+                  }}
+                >
+                  {selectedFiles.length}/{MAX_FILES} files
+                </p>
+              </div>
+            )}
           </div>
         )}
 
-        {}
         {sendError && (
           <div className="result-box error-box" style={{ textAlign: "center" }}>
             <p style={{ color: "var(--error)" }}>{sendError}</p>
           </div>
         )}
-
-        {}
         {sendResult && (
           <div className="result-box success" style={{ textAlign: "center" }}>
             <p style={{ color: "var(--success)", fontWeight: "500" }}>
@@ -469,8 +581,17 @@ export default function AdminPage() {
             </p>
           </div>
         )}
+        {sendProgress && (
+          <div style={{ textAlign: "center" }}>
+            <p
+              className="animate-pulse-slow"
+              style={{ color: "var(--primary)" }}
+            >
+              {sendProgress}
+            </p>
+          </div>
+        )}
 
-        {}
         <button
           onClick={handleSend}
           disabled={isSending}
@@ -481,7 +602,6 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {}
       <div style={{ textAlign: "center" }}>
         <button onClick={() => router.push("/")} className="link-subtle">
           ← Back to Public Clipboard

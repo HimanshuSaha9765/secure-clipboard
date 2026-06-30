@@ -78,10 +78,12 @@ export async function POST(request) {
       success: true,
       clip: {
         type: clipData.type,
-        content: clipData.content,
+        content: clipData.content || null,
         fileName: clipData.fileName || null,
         fileType: clipData.fileType || null,
         fileSize: clipData.fileSize || null,
+        files: clipData.files || null,
+        fileCount: clipData.fileCount || null,
       },
       remainingMs: remainingMs,
     });
